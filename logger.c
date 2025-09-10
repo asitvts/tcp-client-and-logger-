@@ -25,7 +25,7 @@ struct sockaddr_in server_addr;
 
 
 
-int main(){
+int main(int argc, char **argv){
 
 	time_t now;
 	struct tm* local;
@@ -67,7 +67,7 @@ int main(){
 	}
 	
 	FILE* fptr = NULL;
-	fptr = fopen("logfile.txt", "a");
+	fptr = fopen(argv[1], "a");
 	if(fptr==NULL){
 		printf("error opening the file.. exiting\n");
 		return 4;
