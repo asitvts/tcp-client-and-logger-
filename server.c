@@ -19,11 +19,13 @@
 #define FirstByte 0
 
 #define NORMAL_CLIENT 0
+#define STATUS_MANAGER 1
 #define LOGGER 2
 
 #define NAME_SIZE 20
 #define MSG_SIZE 235
 #define LOGGER_SIZE 5
+#define STAT_MAN_SIZE 5
 
 
 
@@ -57,6 +59,18 @@ void sigint_handler(int signum){
 }
 
 
+// active clients
+
+int active_conns[100];
+void init_active_conns(){
+	for(int i=0; i<100; i++)active_conns[i]=-1;
+}
+
+int get_total_active_clients(){
+	int sum=0;
+	for(int i=0; i<100; i++)sum+=(active_conns[i]==1);
+	return sum;
+}
 
 
 
@@ -135,46 +149,125 @@ void init_logger(){
 }
 
 
+// status managers
+
+int status_managers[STAT_MAN_SIZE];
+void init_stat_man(){
+	for(int i=0; i<STAT_MAN_SIZE; i++)status_managers[i]=-1;
+}
 
 
+
+// send connection info to all status managers. if there are none, nothing is sent
+void send_connection_info_to_status_managers(){
+	
+	uint8_t sum = get_total_active_clients();
+	
+	for(int i=0; i<STAT_MAN_SIZE; i++){
+		if(status_managers[i]==-1)continue;
+		int client_fd = status_managers[i];
+		
+		char buf[BUF]={0};
+		buf[0]=sum;
+		
+		int bytes_sent = send(client_fd, buf, BUF, 0);
+		
+		if(bytes_sent==-1)continue;
+	}
+	
+	
+}
 
 
 
 
 // accept any incoming connection request
 
-void acceptor(){
+void acceptor() {
+    while (1) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
 
-	while(1){
-		
-		struct sockaddr_in client_addr;
-		socklen_t client_len = sizeof(client_addr);
-		
-		int client_fd = accept(server_fd, (struct sockaddr* )&client_addr, &client_len);
-		
-		if(client_fd == -1){
-			if(errno == EINTR) {
-			  // Interrupted by signal, time to exit acceptor loop
-			  printf("accept() interrupted by signal\n");
-			  break;
-            	}
-            	else{
-				printf("error accepting this client\ncontinuing\n");
-				continue;
-            	}
-		}
-		
-		char ip[INET_ADDRSTRLEN];
-		inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
-		
-		printf("accepted connection with client at %s and port %d\n", ip, ntohs(client_addr.sin_port));
-		
-		enqueue(client_fd);
-	}
-	
-	return;
+        int client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &client_len);
 
+        if (client_fd == -1) {
+            if (errno == EINTR) {
+                printf("accept() interrupted by signal\n");
+                break;
+            } else {
+                printf("error accepting this client\ncontinuing\n");
+                continue;
+            }
+        }
+
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+        printf("accepted connection with client at %s and port %d\n", ip, ntohs(client_addr.sin_port));
+
+
+        // Reading first message to determine client type
+        
+        char buf[BUF] = {0};
+        int bytes_read = recv(client_fd, buf, BUF, 0);
+        if (bytes_read <= 0) {
+            printf("failed to read initial message from client\n");
+            close(client_fd);
+            continue;
+        }
+
+        if (buf[FirstByte] == NORMAL_CLIENT) {
+            active_conns[client_fd] = 1;
+            send_connection_info_to_status_managers();
+            enqueue(client_fd);
+        } 
+        
+        else if (buf[FirstByte] == LOGGER) {
+            int slot = -1;
+            for (int i = 0; i < LOGGER_SIZE; i++) {
+                if (loggers[i] == -1) {
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot == -1) {
+                printf("no space to accept logger\n");
+                close(client_fd);
+            } 
+            
+            else {
+                loggers[slot] = client_fd;
+                printf("logger connected at slot %d\n", slot);
+            }
+        } 
+        
+        else if (buf[FirstByte] == STATUS_MANAGER) {
+            int slot = -1;
+            for (int i = 0; i < STAT_MAN_SIZE; i++) {
+                if (status_managers[i] == -1) {
+                    slot = i;
+                    break;
+                }
+            }
+            if (slot == -1) {
+                printf("no space to accept status manager\n");
+                close(client_fd);
+            } 
+            else {
+                status_managers[slot] = client_fd;
+                printf("status manager connected at slot %d\n", slot);
+                send_connection_info_to_status_managers();
+            }
+        } 
+        
+        
+        else {
+            printf("unknown client type, closing\n");
+            close(client_fd);
+        }
+    }
 }
+
+
 
 
 
@@ -208,6 +301,8 @@ void* pool_of_threads(void* arg){
 			if(bytes_read == 0){
 				printf("client called for unconditional termination\n");
 				close(client_fd);
+				active_conns[client_fd]=-1;					// updating total active connections
+				send_connection_info_to_status_managers();		// sending update to status managers
 				break;
 			}
 			
@@ -239,20 +334,12 @@ void* pool_of_threads(void* arg){
 				if(strcmp(msg,"close")==0){
 					printf("closing this client\n");
 					close(client_fd);
+					active_conns[client_fd]=-1;		// updating total active connections
+					send_connection_info_to_status_managers();		// sending update to status managers
 					break;
 				}
 				
 			}
-			
-			// add a logger
-			else if(buf[FirstByte] == LOGGER){
-				for(int i=0; i<LOGGER_SIZE; i++){
-					if(loggers[i]==-1){
-						loggers[i]=client_fd;
-						break;
-					}
-				}
-			}	
 		}
 	}
 }
@@ -271,6 +358,7 @@ int main(){
 	sa.sa_flags=0;
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGINT, &sa, NULL);
+	
 	
 	
 	server_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -317,6 +405,8 @@ int main(){
 	pthread_cond_init(&cond,NULL);
 	init_queue();
 	init_logger();
+	init_active_conns();
+	init_stat_man();
 	
 	pthread_t threads[10];
 	
@@ -342,32 +432,6 @@ int main(){
 
 	return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

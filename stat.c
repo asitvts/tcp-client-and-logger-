@@ -11,23 +11,23 @@
 #include <time.h>
 
 
-int logger_fd;
+int stat_fd;
 struct sockaddr_in server_addr;
 
 #define BUF 256
 #define PORT 2000
 
 #define FirstByte 0
-#define LOGGER 2
 #define NAME_SIZE 20
 #define MSG_SIZE 235
+#define STATUS_MANAGER 1
 
 
 void sigint_handler(int signum){
 
 	if(signum==SIGINT){
 		printf("terminating\n");
-		close(logger_fd);
+		close(stat_fd);
 		exit(0);
 	}
 }
@@ -44,8 +44,8 @@ int main(int argc, char **argv){
 	struct tm* local;
 	char time_buf[80];
 	
-	logger_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if(logger_fd == -1){
+	stat_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if(stat_fd == -1){
 		printf("error making socket\n");
 		return 1;
 	}
@@ -58,10 +58,10 @@ int main(int argc, char **argv){
 	
 	
 	
-	int connect_ret = connect(logger_fd, (struct sockaddr*)&server_addr, sizeof(server_addr));
+	int connect_ret = connect(stat_fd, (struct sockaddr*)&server_addr, sizeof(server_addr));
 	if(connect_ret == -1){
 		printf("error connecting\n");
-		close(logger_fd);
+		close(stat_fd);
 		return 2;
 	}
 	
@@ -70,12 +70,12 @@ int main(int argc, char **argv){
 	
 	
 	char buf[BUF]={0};
-	buf[FirstByte]=LOGGER;
-	int bytes_sent= send(logger_fd, buf, BUF, 0);
+	buf[FirstByte]=STATUS_MANAGER;
+	int bytes_sent= send(stat_fd, buf, BUF, 0);
 	
 	if(bytes_sent<0){
-		printf("error sending logger identity\n");
-		close(logger_fd);
+		printf("error sending status manager identity\n");
+		close(stat_fd);
 		return 3;
 	}
 	
@@ -91,12 +91,12 @@ int main(int argc, char **argv){
 	
 	while(1){
 		
-		// logger will now only receive
+		// status manager will now only receive
 		
 		
 		memset(buf, 0, BUF);
 		
-		int bytes_recv=recv(logger_fd, buf, BUF, 0);
+		int bytes_recv=recv(stat_fd, buf, BUF, 0);
 		
 		if(bytes_recv<0){
 			printf("error receiving logs from server... continuing\n");
@@ -116,28 +116,29 @@ int main(int argc, char **argv){
 		
 		buf[bytes_recv]='\0';
 		
-		char name[NAME_SIZE+1]={0};
-		strncpy(name, &buf[1], NAME_SIZE);
-		name[NAME_SIZE]='\0';
+		
+		//char conns[2]={0};
+		//strncpy(&conns[0],buf,1);
+		//conns[1]='\0';		// although there is no need for it
 		
 		
-		char msg[MSG_SIZE+1]={0};
-		strncpy(msg, &buf[21],MSG_SIZE);
-		msg[MSG_SIZE]='\0';
+		unsigned int total = (unsigned char)buf[0];
+		printf("total active connections : %u\n", total);
+		fprintf(fptr, "%s    total active connections: %u \n", time_buf, total);
+
 		
 		
+		//printf("total active connections : %s\n", conns);		// show on stdout
 		
-		printf("msg : ' %s ' by : ' %s ' at time : ' %s '\n", msg,name,time_buf);		// show on stdout
-		
-		fprintf(fptr, "%s    %s :  %s\n", time_buf,name,msg);		// write in file
+		//fprintf(fptr, "%s    total active connections: %s \n", time_buf,conns);		// write in file
 	
 		fflush(fptr); 		// this prevents data loss on crash
 	}
 	
 	
 	fclose(fptr);
-	close(logger_fd);
-	printf("logger closed\n");
+	close(stat_fd);
+	printf("status manager closed\n");
 	
 	
 
